@@ -57,6 +57,9 @@
   .cat-item:hover { background: rgba(255,255,255,.04); }
   .cat-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
   .cat-item.off { opacity: .35; }
+  #nav-toggle-row { display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer; padding:3px 0; }
+  #nav-toggle-row input[type=checkbox] { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; flex-shrink:0; }
+  #nav-toggle-row span { user-select:none; }
   .cat-count { margin-left: auto; font-size: 10px; color: var(--muted); }
 
   /* Focus mode nav */
@@ -148,10 +151,17 @@
 
       <!-- GLOBAL -->
       <div id="ctrl-global">
-        <div class="sec">Filtrer le bruit</div>
-        <div class="ctrl-lbl">Masquer si lié par <span id="thr-val">15</span>+ pages</div>
-        <input type="range" id="threshold" min="2" max="147" value="15">
-        <div class="hint">Filtre les liens de navigation repétés sur toutes les pages (menus, footer).</div>
+        <div class="sec">Nav &amp; footer</div>
+        <label id="nav-toggle-row">
+          <input type="checkbox" id="nav-toggle" checked>
+          <span>Masquer liens nav &amp; footer</span>
+        </label>
+        <div id="nav-hint" class="hint" style="margin-top:5px;color:#3fb950"></div>
+        <div id="thr-row" style="margin-top:8px;display:none">
+          <div class="ctrl-lbl">Seuil : <span id="thr-val">22</span>+ pages &#8594; caché</div>
+          <input type="range" id="threshold" min="2" max="50" value="22">
+          <div class="hint">Affine ce qui est considéré comme nav/footer.</div>
+        </div>
         <div class="sec">Catégories</div>
         <div class="cat-list" id="cat-list"></div>
       </div>
@@ -266,6 +276,7 @@ let focusId   = null;
 let focusIdx  = 0;
 let activeCats = new Set(Object.keys(CAT));
 const allIds  = DATA.nodes.map(n => n.id);
+const NAV_THRESHOLD = Math.ceil(DATA.nodes.length * 0.15);
 
 // ── Category legend ───────────────────────────────────────────────
 (function() {
@@ -347,8 +358,18 @@ function setMode(m) {
 
 // ── Global graph ──────────────────────────────────────────────────
 function buildGlobal() {
-  const thr = +document.getElementById('threshold').value;
+  const navOn = document.getElementById('nav-toggle').checked;
+  const thr   = navOn ? NAV_THRESHOLD : +document.getElementById('threshold').value;
   document.getElementById('thr-val').textContent = thr;
+  document.getElementById('thr-row').style.display = navOn ? 'none' : 'block';
+
+  if (navOn) {
+    const hE = DATA.edges.filter(e => e.distinctSourcesOfTarget >= NAV_THRESHOLD).length;
+    const hP = new Set(DATA.edges.filter(e => e.distinctSourcesOfTarget >= NAV_THRESHOLD).map(e => e.target)).size;
+    document.getElementById('nav-hint').textContent = hE.toLocaleString() + ' liens nav/footer masqués (' + hP + ' pages)';
+  } else {
+    document.getElementById('nav-hint').textContent = '';
+  }
 
   const edges = DATA.edges.filter(e =>
     e.distinctSourcesOfTarget < thr &&
@@ -598,6 +619,7 @@ svg.on('click', () => {
 });
 
 document.getElementById('threshold').addEventListener('input', () => { if (!focusMode) buildGlobal(); });
+document.getElementById('nav-toggle').addEventListener('change', () => { if (!focusMode) buildGlobal(); });
 
 document.getElementById('search').addEventListener('input', ev => {
   const q = ev.target.value.trim().toLowerCase();
