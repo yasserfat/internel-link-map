@@ -150,8 +150,22 @@ async function crawl() {
 
     const $ = cheerio.load(html);
 
-    // ── Extraire tous les <a href> ──
+    // ── Extraire les <a href> hors nav/header/footer ──────────────
+    // Les liens dans ces zones sont des liens de template répétés sur
+    // toutes les pages — ils ne reflètent pas le maillage éditorial.
+    const NAV_SEL = [
+      'nav', 'header', 'footer',
+      '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+      '[class*="navbar"]', '[class*="nav-bar"]', '[class*="site-nav"]',
+      '[class*="footer"]', '[class*="site-footer"]',
+    ].join(', ');
+
+    let navSkipped = 0;
+
     $('a[href]').each((_, el) => {
+      // Ignorer les liens dans les conteneurs de navigation / footer
+      if ($(el).closest(NAV_SEL).length) { navSkipped++; return; }
+
       const href   = $(el).attr('href') || '';
       const anchor = $(el).text().trim().replace(/\s+/g, ' ').slice(0, 120);
       const destUrl = normalizeUrl(href, normUrl);
@@ -176,6 +190,9 @@ async function crawl() {
         toVisit.push(destUrl);
       }
     });
+
+    if (navSkipped > 0)
+      console.log(`     ↳ ${navSkipped} liens nav/footer ignorés`);
 
     await sleep(DELAY_MS);
   }
