@@ -8,9 +8,10 @@
  *   1. Démarre depuis la homepage de devflows.eu
  *   2. Visite toutes les pages internes (même domaine)
  *   3. Pour chaque page : extrait tous les <a href> internes
- *   4. Exporte deux fichiers :
- *      - maillage-interne.csv  → matrice source / destination / ancre
+ *   4. Exporte trois fichiers :
+ *      - maillage-interne.csv  → matrice source / destination / ancre / statut HTTP
  *      - pages-orphelines.csv  → pages jamais pointées depuis une autre page
+ *      - liens-casses.csv      → liens internes pointant vers une page en erreur
  *
  * Limites respectées :
  *   - Délai de 600 ms entre chaque requête (pas de ban)
@@ -30,6 +31,7 @@ const DELAY_MS    = 600;                  // délai entre requêtes
 const MAX_PAGES   = 500;                  // sécurité anti-boucle infinie
 const OUTPUT_CSV  = 'maillage-interne.csv';
 const OUTPUT_ORP  = 'pages-orphelines.csv';
+const OUTPUT_BROKEN = 'liens-casses.csv';
 const TIMEOUT_MS  = 10_000;
 
 // Extensions à ignorer
@@ -95,6 +97,7 @@ const visited   = new Set();   // URLs visitées
 const toVisit   = [START_URL]; // file d'attente
 const links     = [];          // { source, destination, anchor, type, annotation }
 const inboundCount = {};       // nb de liens reçus par URL
+const statusMap = new Map();   // path → { status, error } (résultat final après redirects)
 
 async function fetchPage(url) {
   const ctrl = new AbortController();
@@ -107,14 +110,15 @@ async function fetchPage(url) {
     });
     clearTimeout(timer);
     const finalUrl = res.url;  // URL après redirects
+    const status   = res.status;
     const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('text/html')) return { html: null, finalUrl };
+    if (!ct.includes('text/html')) return { html: null, finalUrl, status, error: null };
     const html = await res.text();
-    return { html, finalUrl };
+    return { html, finalUrl, status, error: null };
   } catch (err) {
     clearTimeout(timer);
     console.warn(`  ✗ Erreur sur ${url} : ${err.message}`);
-    return { html: null, finalUrl: url };
+    return { html: null, finalUrl: url, status: null, error: err.message };
   }
 }
 
@@ -132,7 +136,14 @@ async function crawl() {
     const anno = annotate(path);
     console.log(`[${visited.size}/${MAX_PAGES}] ${path}${anno ? '  ← ' + anno : ''}`);
 
-    const { html, finalUrl } = await fetchPage(normUrl);
+    const { html, finalUrl, status, error } = await fetchPage(normUrl);
+    statusMap.set(path, { status, error });
+
+    if (error) {
+      console.log(`     ✗ ÉCHEC : ${error}`);
+    } else if (status >= 400) {
+      console.log(`     ⚠ HTTP ${status}`);
+    }
 
     // Si redirect vers URL différente, enregistrer le redirect
     const normFinal = normalizeUrl(finalUrl, START_URL);
@@ -201,10 +212,25 @@ async function crawl() {
 }
 // ── FIN CRAWLER ──────────────────────────────────────────────────
 
+// ── Statut HTTP d'une destination (après résolution des redirects) ─
+function destStatus(destPath) {
+  const s = statusMap.get(destPath);
+  if (!s) return 'non vérifié';               // hors périmètre du crawl (ex: MAX_PAGES atteint)
+  if (s.error) return `ERREUR (${s.error})`;
+  return String(s.status);
+}
+
+function isBrokenStatus(destPath) {
+  const s = statusMap.get(destPath);
+  if (!s) return false;                       // inconnu ≠ cassé, on ne peut pas l'affirmer
+  if (s.error) return true;
+  return s.status >= 400;
+}
+
 // ── EXPORT CSV ───────────────────────────────────────────────────
 function exportCSV() {
   // ── Fichier 1 : matrice complète des liens ──
-  const header1 = ['Source', 'Destination', 'Ancre', 'Type', 'Annotation cible', 'Nb liens entrants vers destination'];
+  const header1 = ['Source', 'Destination', 'Ancre', 'Type', 'Annotation cible', 'Nb liens entrants vers destination', 'Statut HTTP destination'];
   const rows1   = links.map(l => [
     l.source,
     l.destination,
@@ -212,6 +238,7 @@ function exportCSV() {
     l.type,
     l.annotation,
     inboundCount[l.destination] || 0,
+    destStatus(l.destination),
   ]);
 
   const csv1 = [header1, ...rows1]
@@ -240,6 +267,21 @@ function exportCSV() {
   writeFileSync(OUTPUT_ORP, '\uFEFF' + csv2, 'utf8');
   console.log(`📄 Export : ${OUTPUT_ORP}  (${rows2.length} pages orphelines)`);
 
+  // ── Fichier 3 : liens internes cassés ──
+  // Un lien est cassé si sa destination (après redirects) répond en erreur
+  // HTTP (4xx/5xx) ou n'a pas pu être jointe du tout.
+  const brokenLinks = links.filter(l => l.type === 'interne' && isBrokenStatus(l.destination));
+
+  const header3 = ['Page source', 'Lien cassé (destination)', 'Ancre', 'Statut HTTP'];
+  const rows3   = brokenLinks.map(l => [l.source, l.destination, l.anchor, destStatus(l.destination)]);
+
+  const csv3 = [header3, ...rows3]
+    .map(row => row.map(escapeCSV).join(','))
+    .join('\n');
+
+  writeFileSync(OUTPUT_BROKEN, '\uFEFF' + csv3, 'utf8');
+  console.log(`📄 Export : ${OUTPUT_BROKEN}  (${rows3.length} liens cassés)`);
+
   // ── Résumé console ──
   console.log('\n─────────────────────────────────────────');
   console.log('RÉSUMÉ MAILLAGE INTERNE');
@@ -248,6 +290,7 @@ function exportCSV() {
   console.log(`Liens internes totaux : ${links.filter(l => l.type === 'interne').length}`);
   console.log(`Redirects détectés    : ${links.filter(l => l.type === 'redirect').length}`);
   console.log(`Pages orphelines      : ${orphelines.length}`);
+  console.log(`Liens cassés          : ${brokenLinks.length}`);
 
   console.log('\nPages piliers — liens entrants reçus :');
   Object.entries(PILIERS).forEach(([path, label]) => {

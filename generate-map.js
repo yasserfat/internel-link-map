@@ -79,12 +79,21 @@ const data = rows.slice(1).filter(r => r.length >= 4 && r[0] !== '');
 const allPaths      = new Set();
 const sourcesOfDest = new Map();   // dst → Set(src)
 const edgeMap       = new Map();   // "src|||dst" → { source, target, weight, anchors }
+const statusByPath   = new Map();  // path → statut HTTP brut (colonne 7 du CSV)
+
+// Un lien est cassé si le statut HTTP de sa destination n'est pas un 2xx/3xx numérique
+function isBrokenStatus(status) {
+  if (!status) return false;
+  const n = Number(status);
+  return !Number.isFinite(n) || n >= 400;
+}
 
 data.forEach(r => {
-  const [src, dst, anchor, type] = r;
+  const [src, dst, anchor, type, , , status] = r;
   if (!src || !dst) return;
   allPaths.add(src);
   allPaths.add(dst);
+  if (status && !statusByPath.has(dst)) statusByPath.set(dst, status);
   if (type === 'redirect') return;
   if (src === dst) return;
 
@@ -100,6 +109,7 @@ data.forEach(r => {
 
 const nodes = [...allPaths].map(path => {
   const inboundDistinct = sourcesOfDest.get(path)?.size || 0;
+  const httpStatus = statusByPath.get(path) || null;
   return {
     id: path,
     category: categoryOf(path),
@@ -107,6 +117,8 @@ const nodes = [...allPaths].map(path => {
     inboundDistinct,
     isOrphan: inboundDistinct === 0 && path !== '/',
     isTypo: /servieces/.test(path),
+    httpStatus,
+    isBroken: isBrokenStatus(httpStatus),
   };
 });
 
@@ -116,12 +128,14 @@ const edges = [...edgeMap.values()].map(e => ({
   weight: e.weight,
   distinctSourcesOfTarget: sourcesOfDest.get(e.target)?.size || 0,
   anchors: [...e.anchors],
+  brokenTarget: isBrokenStatus(statusByPath.get(e.target)),
 }));
 
 const totalSourcePages = allPaths.size;
 const generatedAt = new Date().toISOString();
+const brokenCount = nodes.filter(n => n.isBroken).length;
 
-console.log(`✅ Pages : ${nodes.length} | Liens agrégés : ${edges.length}`);
+console.log(`✅ Pages : ${nodes.length} | Liens agrégés : ${edges.length} | Liens cassés : ${brokenCount}`);
 
 // Résumé par catégorie
 const catCount = {};
@@ -137,7 +151,7 @@ console.log('\n📝 Mise à jour de', OUTPUT_HTML, '...');
 
 let html = readFileSync(OUTPUT_HTML, 'utf8');
 
-const payload = { nodes, edges, totalSourcePages, generatedAt };
+const payload = { nodes, edges, totalSourcePages, generatedAt, brokenCount };
 const newDataLine = `const DATA = ${JSON.stringify(payload)};`;
 
 // Trouver et remplacer la ligne DATA existante

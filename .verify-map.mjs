@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import path from 'path';
 
-const filePath = 'file:///' + path.resolve('maillage-map.html').replace(/\\/g, '/');
+const filePath = 'file:///' + path.resolve('index.html').replace(/\\/g, '/');
 
 const errors = [];
 const consoleMsgs = [];
@@ -16,12 +16,13 @@ await page.waitForTimeout(2500);
 
 const statPages = await page.textContent('#stat-pages');
 const statEdges = await page.textContent('#stat-edges');
-const statVisible = await page.textContent('#stat-edges-visible');
-const statIsolated = await page.textContent('#stat-isolated');
+const statVisible = await page.textContent('#stat-vis');
+const statOrphan = await page.textContent('#stat-orp');
+const statBroken = await page.textContent('#stat-broken');
 const nodeCount = await page.locator('circle.node').count();
 const linkCount = await page.locator('line.link').count();
 
-console.log('STATS:', { statPages, statEdges, statVisible, statIsolated, nodeCount, linkCount });
+console.log('STATS:', { statPages, statEdges, statVisible, statOrphan, statBroken, nodeCount, linkCount });
 
 await page.screenshot({ path: '.verify-screenshot-1-initial.png' });
 
@@ -33,10 +34,11 @@ console.log('DETAILS AFTER CLICK (first 400 chars):', detailsHtml.slice(0, 400))
 
 await page.screenshot({ path: '.verify-screenshot-2-clicked.png' });
 
+await page.uncheck('#nav-toggle');
 await page.fill('#threshold', '5');
 await page.dispatchEvent('#threshold', 'input');
 await page.waitForTimeout(2000);
-const statVisible2 = await page.textContent('#stat-edges-visible');
+const statVisible2 = await page.textContent('#stat-vis');
 console.log('After lowering threshold to 5, visible edges:', statVisible2);
 await page.screenshot({ path: '.verify-screenshot-3-filtered.png' });
 
